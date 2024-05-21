@@ -38,7 +38,7 @@ static unsigned int default_target_loads[] = {DEFAULT_TARGET_LOAD};
 #include <linux/cpufreq_effiency.h>
 #endif
 
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 #include <linux/sched_assist/eas_opt/oplus_cap.h>
 #endif
 #ifdef CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT
@@ -841,7 +841,7 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned long irq_flags;
 #endif
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 #ifndef CONFIG_OPLUS_FEATURE_FRAME_BOOST
 	struct cpufreq_policy *policy = sg_policy->policy;
 #endif
@@ -903,7 +903,7 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	raw_spin_unlock_irqrestore(&sg_policy->update_lock, irq_flags);
 #endif
 
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	if (eas_opt_enable && (util_thresh_percent[cluster_id] != 100)) {
 		util_thresh = max * util_thresh_cvt[cluster_id] >> SCHED_CAPACITY_SHIFT;
 		avg_nr_running = rq->nr_running;
@@ -950,7 +950,7 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 	u64 last_freq_update_time = sg_policy->last_freq_update_time;
 	unsigned long util = 0, max = 1;
 	unsigned int j;
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	unsigned long util_thresh = 0;
 	unsigned long util_orig = 0;
 	unsigned int avg_nr_running = 1;
@@ -962,7 +962,7 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 		struct sugov_cpu *j_sg_cpu = &per_cpu(sugov_cpu, j);
 		unsigned long j_util, j_max;
 		s64 delta_ns;
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 		struct rq *rq = cpu_rq(j);
 		avg_nr_running += rq->nr_running;
 		count_cpu ++;
@@ -1005,7 +1005,7 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 	fbg_freq_policy_util(sg_policy->flags, policy->cpus, &util);
 #endif
 
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	if (eas_opt_enable && (oplus_cap_multiple[cluster_id] != 100 || util_thresh_percent[cluster_id] != 100) && count_cpu) {
 		util_thresh = max * util_thresh_cvt[cluster_id] >> SCHED_CAPACITY_SHIFT;
 		avg_nr_running = mult_frac(avg_nr_running, 1, count_cpu);

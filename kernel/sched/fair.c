@@ -84,7 +84,7 @@ static inline bool task_fits_max(struct task_struct *p, int cpu);
 #include <linux/sched_info/osi_tasktrack.h>
 #endif
 
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 #include <linux/sched_assist/eas_opt/oplus_cap.h>
 #endif
 
@@ -4243,6 +4243,29 @@ static void check_spread(struct cfs_rq *cfs_rq, struct sched_entity *se)
 #endif
 }
 
+static inline bool entity_is_long_sleeper(struct sched_entity *se)
+{
+	struct cfs_rq *cfs_rq;
+	u64 sleep_time;
+
+	if (se->exec_start == 0)
+		return false;
+
+	cfs_rq = cfs_rq_of(se);
+
+	sleep_time = rq_clock_task(rq_of(cfs_rq));
+
+	/* Happen while migrating because of clock task divergence */
+	if (sleep_time <= se->exec_start)
+		return false;
+
+	sleep_time -= se->exec_start;
+	if (sleep_time > ((1ULL << 63) / scale_load_down(NICE_0_LOAD)))
+		return true;
+
+	return false;
+}
+
 static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 {
@@ -4290,9 +4313,30 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 #endif
 	}
 
-	/* ensure we never gain time by being placed backwards. */
-	se->vruntime = max_vruntime(se->vruntime, vruntime);
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+	/*
+	 * Pull vruntime of the entity being placed to the base level of
+	 * cfs_rq, to prevent boosting it if placed backwards.
+	 * However, min_vruntime can advance much faster than real time, with
+	 * the extreme being when an entity with the minimal weight always runs
+	 * on the cfs_rq. If the waking entity slept for a long time, its
+	 * vruntime difference from min_vruntime may overflow s64 and their
+	 * comparison may get inversed, so ignore the entity's original
+	 * vruntime in that case.
+	 * The maximal vruntime speedup is given by the ratio of normal to
+	 * minimal weight: scale_load_down(NICE_0_LOAD) / MIN_SHARES.
+	 * When placing a migrated waking entity, its exec_start has been set
+	 * from a different rq. In order to take into account a possible
+	 * divergence between new and prev rq's clocks task because of irq and
+	 * stolen time, we take an additional margin.
+	 * So, cutting off on the sleep time of
+	 *     2^63 / scale_load_down(NICE_0_LOAD) ~ 104 days
+	 * should be safe.
+	 */
+	if (entity_is_long_sleeper(se))
+		se->vruntime = vruntime;
+	else
+		se->vruntime = max_vruntime(se->vruntime, vruntime);
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	android_rvh_place_entity_handler(NULL, cfs_rq, se, initial, &vruntime);
 #endif
 }
@@ -4390,6 +4434,9 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	if (flags & ENQUEUE_WAKEUP)
 		place_entity(cfs_rq, se, 0);
+	/* Entity has migrated, no longer consider this task hot */
+	if (flags & ENQUEUE_MIGRATED)
+		se->exec_start = 0;
 
 	check_schedstat_required();
 	update_stats_enqueue(cfs_rq, se, flags);
@@ -6831,7 +6878,7 @@ static void walt_get_indicies(struct task_struct *p, int *order_index,
 
 	for (i = *order_index ; i < num_sched_clusters - 1; i++) {
 		if (task_demand_fits(p, cpumask_first(&cpu_array[i][0])))
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 		{
 			if (adjust_group_task(p, cpumask_first(&cpu_array[i][0])))
 				continue;
@@ -7289,7 +7336,7 @@ compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd)
 	unsigned long energy = 0;
 	int cpu;
 	unsigned long cpu_util;
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	struct rq* rq = NULL;
 	unsigned int avg_nr_running = 1;
 	unsigned int count_cpu = 0;
@@ -7335,14 +7382,14 @@ compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd)
 					      FREQUENCY_UTIL, tsk);
 #endif
 		max_util = max(max_util, cpu_util);
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 		rq = cpu_rq(cpu);
 		avg_nr_running += rq->nr_running;
 		count_cpu++;
 #endif
 	}
 
-#ifdef CONFIG_OPLUS_FEATURE_OPLUS_CAP
+#ifdef CONFIG_OPLUS_FEATURE_VT_CAP
 	if (eas_opt_enable && (util_thresh_percent[cluster_id] != 100) && count_cpu) {
 		unsigned long max_util_bak = max_util;
 		util_thresh = capacity * util_thresh_cvt[cluster_id] >> SCHED_CAPACITY_SHIFT;
@@ -7911,9 +7958,6 @@ static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 
 	/* Tell new CPU we are migrated */
 	p->se.avg.last_update_time = 0;
-
-	/* We have migrated, no longer consider this task hot */
-	p->se.exec_start = 0;
 
 	update_scan_period(p, new_cpu);
 }
@@ -9366,7 +9410,7 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 {
 	unsigned long capacity = arch_scale_cpu_capacity(cpu);
 	struct sched_group *sdg = sd->groups;
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OPLUS_CAP)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_VT_CAP)
 	int cluster_id = topology_physical_package_id(cpu);
 #endif
 
@@ -9374,7 +9418,7 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 	capacity >>= SCHED_CAPACITY_SHIFT;
 
 	capacity = min(capacity, thermal_cap(cpu));
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OPLUS_CAP)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_VT_CAP)
 	if (eas_opt_enable && cluster_id >= 0 && cluster_id < OPLUS_CLUSTERS)
 		cpu_rq(cpu)->cpu_capacity_orig = mult_frac(capacity, oplus_cap_multiple[cluster_id], 100);
 	else
@@ -9384,7 +9428,7 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 	cpu_rq(cpu)->cpu_capacity_orig = capacity;
 #endif
 
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OPLUS_CAP)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_VT_CAP)
 	capacity = scale_rt_capacity(cpu, cpu_rq(cpu)->cpu_capacity_orig);
 #else
 	capacity = scale_rt_capacity(cpu, capacity);
@@ -9397,7 +9441,7 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 	sdg->sgc->capacity = capacity;
 	sdg->sgc->min_capacity = capacity;
 	sdg->sgc->max_capacity = capacity;
-#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OPLUS_CAP)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_VT_CAP)
 	if (unlikely(eas_opt_debug_enable))
 			oplus_cap_systrace_c(cpu, cpu_rq(cpu)->cpu_capacity_orig, real_cpu_cap[cpu]);
 #endif
@@ -10715,7 +10759,7 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 		.sd		= sd,
 		.dst_cpu	= this_cpu,
 		.dst_rq		= this_rq,
-		.dst_grpmask    = sched_group_span(sd->groups),
+		.dst_grpmask    = group_balance_mask(sd->groups),
 		.idle		= idle,
 		.loop_break	= sched_nr_migrate_break,
 		.cpus		= cpus,
